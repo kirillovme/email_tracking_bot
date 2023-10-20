@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+
+  web:
+    build:
+      context: .
+      dockerfile: ./email_bot_web/Dockerfile
+    restart: always
+    container_name: web
+    command: ["./entrypoint.sh", "web"]
+    volumes:
+      - email_bot_static_value:/app/web-static/
+      - email_bot_media_value:/app/web-media/
+      - shared_data:/app/infrastructure/utils
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+
+  db:
+    image: postgres:15-alpine
+    restart: always
+    container_name: db
+    ports:
+      - "5432:5432"
+    volumes:
+      - email_bot_pgdata:/var/lib/postgresql/data/
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 80s
+
+  redis:
+    image: "redis:alpine"
+    restart: always
+    container_name: redis
+    volumes:
+      - email_bot_redis_data:/data
+    expose:
+      - "6379"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 80s
+
+  celery_worker:
+      build:
+        context: .
+        dockerfile: ./email_bot_web/Dockerfile
+      container_name: celery_worker
+      command: ["./entrypoint.sh", "worker"]
+      depends_on:
+        - web
+        - db
+        - redis
+      env_file:
+      - .env
+
+  celery_beat:
+      build:
+        context: .
+        dockerfile: ./email_bot_web/Dockerfile
+      container_name: celery_beat
+      command: ["./entrypoint.sh", "beat"]
+      depends_on:
+        - web
+        - db
+        - redis
+      env_file:
+      - .env
+
+  flower:
+    build:
+      context: .
+      dockerfile: ./email_bot_web/Dockerfile
+    env_file:
+      - .env
+    container_name: flower_app
+    command: ["./entrypoint.sh", "flower"]
+    depends_on:
+      - redis
+      - celery_beat
+      - celery_worker
+    ports:
+      - "5555:5555"
+
+  telegram_bot:
+    build:
+      context: .
+      dockerfile: ./bot/Dockerfile
+    restart: always
+    container_name: telegram_bot
+    volumes:
+      - telegram_bot_data:/data
+      - shared_data:/bot/crypto
+    env_file:
+      - .env
+    depends_on:
+      - web
+
+volumes:
+  email_bot_pgdata:
+    name: email_bot_pgdata
+  email_bot_static_value:
+    name: email_bot_static_value
+  email_bot_media_value:
+    name: email_bot_media_value
+  email_bot_redis_data:
+    name: email_bot_redis_data
+  telegram_bot_data:
+    name: telegram_bot_data
+  shared_data:
+    name: email_bot_shared_data
